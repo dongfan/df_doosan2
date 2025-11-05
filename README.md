@@ -1,56 +1,120 @@
-<!-- DSR Test Package Description -->
-# DSR ROS 2 dsr_example Package
+# Smart Refueler ROS 2 Package
+두산 협동로봇과 YOLO 기반 비전을 결합해 차량의 주유구를 자동으로 탐지·접근·주유하는 ROS 2 패키지입니다. Flutter 앱 → FastAPI → ROS 2 노드로 이어지는 풀 파이프라인을 구축해 포트폴리오용 실사용 시나리오를 구현했습니다.
 
-## Description
+## 프로젝트 한눈에 보기
+- **모션 시퀀스 자동화**: 결제 완료와 차량 정지 여부를 확인한 뒤 e0509 협동로봇이 노즐을 잡고 차량 주유구까지 움직이는 전체 FSM을 `motion_controller`가 담당합니다.
+- **듀얼 카메라 비전**: USB 웹캠으로 차량 도착을 감지하고, Intel RealSense depth 기반 YOLO 모델로 주유구 위치를 3D 포인트로 산출합니다.
+- **DRL 기반 그리퍼 제어**: Modbus 명령을 DRL 스크립트로 로딩해 Doosan 플랜지 시리얼을 통해 전동 그리퍼를 초기화·제어합니다.
+- **API 연동**: FastAPI 서버가 `/start_fuel` 토픽을 발행하면 ROS 2 노드가 주문 정보와 연동된 주유 작업을 수행합니다.
+- **현장형 안전장치**: 워크스페이스 제한, Z 최소 높이, 힘 안전 감지 등 실제 협동로봇 적용을 고려한 소프트 리밋을 적용했습니다.
 
-A simple dsr_example package for using a Doosan Robot with the DSR ROS 2 `dsr_common2` Python package.
-
-- **dance example**: Example using various motion services (`movej`, `movel`, `moveb`, etc.)
-- **single_robot_simple example**: Example using `movej` motion services
-
-## Requirements
-
-- ROS 2 Humble release
-- DSR ROS 2 Package Setting
-
-## Build instructions
-
-### DSR ROS 2 dsr_common2 package install
-
-Add the following code to `dsr_common2/CMakeLists.txt`:
-
-```cmake
-install(DIRECTORY imp DESTINATION lib/${PROJECT_NAME}
-FILES_MATCHING PATTERN "*.py"
-PERMISSIONS OWNER_EXECUTE OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ
-)
+## 아키텍처
+```
+Flutter App ──▶ FastAPI 서버 ──▶ /start_fuel
+                                   │
+                                   ▼
+                        FuelCommandListener (/fuel_task/start)
+                                   │
+       ┌──────────────┬────────────┴─────────────┐
+       ▼              ▼                          ▼
+WebcamManager   RealSenseManager         MotionController
+  │                  │                      │         │
+  │                  └── YOLO (VisionTargetNode) ────┘
+  │                           │
+  ▼                           ▼
+/car_detected        /fuel/object_3d & /fuel/yolo_detections
 ```
 
-### Edit .bashrc
-Add Python Path for DSR module:
+## 제공 노드
+| 노드 | 역할 | 주요 인터페이스 |
+| --- | --- | --- |
+| `motion_controller` | 결제/차량 감지 FSM, 로봇 경로 계획, 그리퍼 제어 | Sub: `/fuel_task/start`, `/car_detected`, `/fuel/yolo_detections`, `/fuel/object_3d`, `/stop_motion`<br>Pub: `/fuel_status`, `/target_direction` |
+| `vision_target_node` | 듀얼 YOLO 추론, 2D → 3D 변환, 차량 감지 이벤트 | Sub: `/fuel/webcam_color`, `/fuel/realsense_color`, `/fuel/realsense_depth`<br>Pub: `/fuel/yolo_detections`, `/fuel/object_3d`, `/fuel/image_result`, `/car_detected` |
+| `realsense_manager_ros` | RealSense 컬러/깊이 스트림 정렬 및 퍼블리시 | Pub: `/fuel/realsense_color`, `/fuel/realsense_depth` |
+| `webcam_manager_ros` | USB 웹캠 프레임 취득 및 퍼블리시 | Pub: `/fuel/webcam_color` |
+| `fuel_command_listener` | FastAPI → ROS 브리지, 주문 데이터 전달 | Sub: `/start_fuel` → Pub: `/fuel_task/start` |
+| `example_*` | 토픽 테스트 및 로봇 단독 예제 | `example_move`, `example_gripper` 등 |
+
+## 요구 사항
+### 하드웨어
+- Doosan 협동로봇 e0509 (또는 동일한 DOF/그리퍼 구성을 갖춘 모델)
+- Modbus 제어 전동 그리퍼 (Doosan 플랜지 시리얼 사용)
+- Intel RealSense (D435 시리즈 권장) 및 USB 웹캠
+- NVIDIA GPU 권장 (YOLO 추론 가속)
+
+### 소프트웨어
+- Ubuntu 22.04 + ROS 2 Humble
+- Doosan ROS 2 드라이버 패키지 (`dsr_common2`, `dsr_bringup2`)
+- Python 3.10, `ultralytics`, `opencv-python`, `pyrealsense2`, `cv_bridge`
+- RealSense SDK 및 udev 설정
+
+필수 환경 변수:
 ```bash
 export PYTHONPATH=$PYTHONPATH:~/ros2_ws/install/dsr_common2/lib/dsr_common2/imp
 ```
 
-### Build
-Build dsr_example package:
-```shell
-cd ros2_ws
+## 설치 및 빌드
+```bash
+# 워크스페이스 구성
+mkdir -p ~/ros2_ws/src
+cd ~/ros2_ws/src
+git clone <this-repository> dsr_example
+
+# 의존 패키지 설치 (예시)
+sudo apt install ros-humble-cv-bridge ros-humble-launch ros-humble-launch-ros
+pip install ultralytics opencv-python pyrealsense2
+
+# 빌드
+cd ~/ros2_ws
 colcon build --packages-select dsr_example
+source install/setup.bash
 ```
 
-### Run Dance Example
-```shell
-ros2 launch dsr_bringup2 dsr_bringup2_rviz.launch.py mode:=virtual host:=127.0.0.1 port:=12345 model:=m1013
-ros2 run dsr_example dance
+## 실행 가이드
+1. **Doosan 로봇 드라이버 기동**
+   ```bash
+   ros2 launch dsr_bringup2 dsr_bringup2_rviz.launch.py \
+     mode:=virtual host:=127.0.0.1 port:=12345 model:=e0509
+   ```
+2. **스마트 주유 파이프라인 실행**
+   ```bash
+   ros2 launch dsr_example smart_refueler_bringup.launch.py
+   ```
+   위 런치 파일은 웹캠, RealSense, YOLO 비전, 모션 컨트롤러, FastAPI 브리지를 순차적으로 실행합니다.
+3. **주유 명령 발행 (예시)**
+   ```bash
+   ros2 topic pub --once /start_fuel std_msgs/String \
+     '{"order_id":"ORDER-001","fuelType":"diesel","amount":50000}'
+   ```
+   - `FuelCommandListener`가 해당 메시지를 `/fuel_task/start`로 전달하고, `motion_controller`가 주유 시퀀스를 시작합니다.
+
+## 개발 기여 포인트
+- **통합 모션 컨트롤 노드**: 기존 연속 스크립트를 ROS 2 서비스/토픽 기반 FSM으로 리팩터링하고, 안전 속도·워크스페이스 제한·힘 감지를 적용했습니다.
+- **YOLO 파이프라인 재설계**: 웹캠과 RealSense에 서로 다른 가중치를 적용해 차량-주유구를 분리 감지하고, depth 맵을 기반으로 TCP에서 사용 가능한 3D 목표 좌표를 산출했습니다.
+- **그리퍼 DRL 스크립트화**: Modbus 초기화·이동·피드백 코드를 DRL 태스크로 캡슐화하여 ROS 노드에서 동기식으로 호출 가능하도록 구현했습니다.
+- **API-ROS 브리지**: FastAPI 백엔드와 ROS 사이의 `String JSON` 프로토콜을 정의하고, 결제/차량 감지 조건이 충족될 때만 모션을 개시하도록 보호 로직을 추가했습니다.
+
+## 데모 영상
+- [Motion sequence demo](https://github.com/user-attachments/assets/19cf76fe-81c6-442c-90ae-ef4b49af17c0)
+- [Single robot example](https://github.com/user-attachments/assets/c9b19447-0f7e-42b2-824a-a744db24079e)
+
+## 프로젝트 구조
 ```
-[Dance Example 시연 영상.webm](https://github.com/user-attachments/assets/19cf76fe-81c6-442c-90ae-ef4b49af17c0)
-
-
-### Run Single Robot Simple Example
-```shell
-ros2 launch dsr_bringup2 dsr_bringup2_rviz.launch.py mode:=virtual host:=127.0.0.1 port:=12345 model:=m1013
-ros2 run dsr_example single_robot_simple
+dsr_example/
+├── fuel_listener_node.py      # FastAPI → ROS 브리지
+├── motion_controller.py       # FSM + 로봇/그리퍼 제어
+├── vision_target_node.py      # 듀얼 YOLO + 3D 포인트 산출
+├── realsense_manager_ros.py   # RealSense 스트림 관리
+├── webcam_manager_ros.py      # USB 웹캠 스트림 관리
+├── weights/                   # YOLO 가중치 (.pt)
+└── simple/                    # 로봇 동작 예제 스크립트
 ```
 
-[Screencast from 2024년 09월 26일 13시 21분 53초.webm](https://github.com/user-attachments/assets/c9b19447-0f7e-42b2-824a-a744db24079e)
+## 향후 개선 아이디어
+- TF 기반 좌표 변환 및 핸드-아이 캘리브레이션 자동화
+- 강인한 힘 제어를 위한 실시간 임피던스/어드미턴스 제어기 연동
+- 주유 단계 모니터링 대시보드 및 알람 시스템
+- YOLO 라벨 세분화 및 다중 차량 대응 로직
+
+## 라이선스
+이 프로젝트는 BSD License를 따릅니다. 상세한 조건은 `LICENSE` 파일 또는 Doosan ROS 2 패키지의 라이선스를 참고하세요.

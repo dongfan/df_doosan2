@@ -19,6 +19,7 @@ class RealSenseManagerROS(Node):
 
         align_to = rs.stream.color
         self.align = rs.align(align_to)
+        
         self.publisher_color = self.create_publisher(Image, '/fuel/realsense_color', 10)
         self.publisher_depth = self.create_publisher(Image, '/fuel/realsense_depth', 10)
 

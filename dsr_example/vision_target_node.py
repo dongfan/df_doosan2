@@ -15,10 +15,11 @@ import os
 import numpy as np
 
 class VisionTargetNode(Node):
-    def __init__(self):
+    def __init__(self, camera_source="realsense"):
         super().__init__('vision_target_node')
         self.bridge = CvBridge()
         self.depth_image = None  # 최근 프레임 저장용가
+        self.camera_source = camera_source
         
         package_share = get_package_share_directory("dsr_example")
         # ✅ 각각 다른 모델 파일 경로 설정
@@ -40,7 +41,8 @@ class VisionTargetNode(Node):
         self.sub_depth = self.create_subscription(Image, '/fuel/realsense_depth', self.depth_callback, 10)
         
         self.pub_result = self.create_publisher(Image, '/fuel/image_result', 10)
-        self.pub_json = self.create_publisher(String, '/fuel/yolo_detections', 10)
+        self.pub_webcam_yolo = self.create_publisher(String, '/fuel/webcam_detections', 10)
+        self.pub_realsense_yolo = self.create_publisher(String, '/fuel/realsense_detections', 10)
         self.pub_3d = self.create_publisher(PointStamped, '/fuel/object_3d', 10)
         self.pub_car_detected = self.create_publisher(String, '/car_detected', 10)
 
@@ -126,11 +128,17 @@ class VisionTargetNode(Node):
                             (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                             (255, 255, 255), 1)
                 
-        # 결과 이미지 생성 (YOLO 내부 시각화)
-        annotated = results[0].plot()
-        self.pub_result.publish(self.bridge.cv2_to_imgmsg(annotated, encoding='bgr8'))
-        self.pub_json.publish(String(data=json.dumps(detections)))
-    
+        # ✅ YOLO가 그린 시각화(십자선 등)를 사용하지 않고, 직접 그린 frame만 퍼블리시
+        self.pub_result.publish(self.bridge.cv2_to_imgmsg(frame, encoding='bgr8'))
+        # YOLO 실행 결과 분기
+        detections_json = json.dumps(detections)
+        if self.camera_source == "webcam":
+            self.pub_webcam_yolo.publish(String(data=detections_json))
+        elif self.camera_source == "realsense":
+            self.pub_realsense_yolo.publish(String(data=detections_json))
+        else:
+            self.get_logger().warn(f"⚠️ Unknown camera source: {self.camera_source}")   
+
 def main(args=None):
     rclpy.init(args=args)
     node = VisionTargetNode()
